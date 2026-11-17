@@ -13,8 +13,8 @@
     "test_end": "2011-09-30"
   },
   "training": {
-    "epochs": 65,
-    "batch_size": 32,
+    "epochs": 30,
+    "batch_size": 64,
     "learning_rate": 0.001,
     "seed": 42,
     "device": "cpu"

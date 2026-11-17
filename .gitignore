@@ -27,6 +27,7 @@ mlruns/
 mlartifacts/
 artifacts/
 outputs/
+runs/
 models/
 checkpoints/
 *.pt

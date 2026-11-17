@@ -78,19 +78,13 @@ def test_accepts_missing_optional_price(valid_data):
     assert validate_raw_data(data) is data
 
 
-def test_rejects_non_numeric_price(valid_data):
+@pytest.mark.parametrize("price", ["gratuit", -2.0, float("inf")])
+def test_accepts_unvalidated_optional_price(valid_data, price):
     data = valid_data.copy()
     data["UnitPrice"] = data["UnitPrice"].astype(object)
+    data.loc[0, "UnitPrice"] = price
 
-    data.loc[0, "UnitPrice"] = "gratuit"
+    result = validate_raw_data(data)
 
-    with pytest.raises(DataValidationError, match="UnitPrice"):
-        validate_raw_data(data)
-
-
-def test_rejects_negative_price(valid_data):
-    data = valid_data.copy()
-    data.loc[0, "UnitPrice"] = -2.0
-
-    with pytest.raises(DataValidationError, match="UnitPrice"):
-        validate_raw_data(data)
+    assert result is data
+    assert result.loc[0, "UnitPrice"] == price

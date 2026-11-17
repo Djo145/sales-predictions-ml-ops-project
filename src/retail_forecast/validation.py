@@ -16,8 +16,8 @@ def validate_raw_data(data: pd.DataFrame) -> pd.DataFrame:
     Les colonnes obligatoires doivent être présentes et renseignées.
     Quantity doit être un nombre entier fini ; les valeurs négatives sont
     autorisées car elles peuvent correspondre à des retours ou corrections.
-    UnitPrice, si la colonne existe, accepte les valeurs absentes, mais les
-    autres valeurs doivent être numériques, finies et positives ou nulles.
+    UnitPrice est une colonne facultative conservée telle quelle, mais elle
+    n'est pas validée car elle n'est pas utilisée pour prévoir les quantités.
 
     Retourne le DataFrame reçu, inchangé, ou lève DataValidationError.
     """
@@ -55,18 +55,6 @@ def validate_raw_data(data: pd.DataFrame) -> pd.DataFrame:
         errors.append(
             f"InvoiceDate contient {int(invalid_dates.sum())} date(s) illisible(s)."
         )
-
-    if "UnitPrice" in data.columns:
-        price = pd.to_numeric(data["UnitPrice"], errors="coerce")
-        provided_price = data["UnitPrice"].notna()
-        invalid_price = provided_price & (
-            price.isna() | ~np.isfinite(price.fillna(0)) | price.lt(0)
-        )
-        if invalid_price.any():
-            errors.append(
-                f"UnitPrice contient {int(invalid_price.sum())} valeur(s) "
-                "non numérique(s), non finie(s) ou négative(s)."
-            )
 
     if errors:
         raise DataValidationError("Données invalides : " + " ".join(errors))

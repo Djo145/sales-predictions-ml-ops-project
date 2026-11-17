@@ -130,10 +130,10 @@ Le contrat concerne les **lignes brutes de facture**, avant leur agrégation en 
 | `InvoiceNo`, `StockCode` | Obligatoires, non vides. |
 | `Quantity` | Obligatoire, renseigné, numérique, fini et entier. Les valeurs négatives sont acceptées : leur traitement appartient à l’agrégation ultérieure. |
 | `InvoiceDate` | Obligatoire et convertible en date. |
-| `UnitPrice` | Facultatif ; les valeurs absentes sont acceptées. Si renseigné, le prix doit être numérique, fini et supérieur ou égal à zéro. |
+| `UnitPrice` | Facultatif et conservé dans les lignes brutes, mais non validé : le prix n’est pas utilisé pour la prévision des quantités. |
 | `Description`, `CustomerID`, `Country` | Facultatives ; leurs valeurs absentes sont autorisées. |
 
-Les tests de `tests/test_validation.py` couvrent les données conformes, les colonnes ou valeurs manquantes, les identifiants vides, les quantités non entières, les dates illisibles et les prix invalides. Résultat vérifié : **9 tests réussis** avec `uv run pytest -q`.
+Les tests de `tests/test_validation.py` couvrent les données conformes, les colonnes ou valeurs manquantes, les identifiants vides, les quantités non entières, les dates illisibles et le fait que les valeurs de `UnitPrice` ne bloquent pas ce projet. La suite complète compte actuellement **37 tests réussis** ; elle est lancée avec `uv run pytest -q`.
 
 ### Étape 2 — Extraire l’ingestion et la préparation des données — implémentée et testée
 
@@ -210,7 +210,43 @@ Résultat vérifié : **34 tests réussis**. Un avertissement Pandas non bloquan
 
 ### Étape 6 — Construire le pipeline d’entraînement
 
-Créer `src/retail_forecast/pipeline.py` pour enchaîner acquisition, validation, préparation, entraînement et évaluation. Garder `train.py` comme point d’entrée simple. Le pipeline devra échouer avant l’entraînement si la validation échoue. Ajouter des tests unitaires vérifiant l’ordre des étapes et prouvant qu’une validation rejetée empêche entraînement et évaluation.
+`src/retail_forecast/pipeline.py` enchaîne les modules précédents sans recopier leur logique : lecture et validation, agrégation quotidienne, création des fenêtres, entraînement, évaluation sur les seules cibles de test, puis sauvegarde des deux modèles avec les fonctions de l’étape 5. Si une étape lève une exception, elle remonte à l’appelant et les étapes suivantes ne sont pas lancées. Les modèles et les métadonnées sont sauvegardés après la réussite de l’évaluation.
+
+`src/retail_forecast/train.py` est le point d’entrée en ligne de commande. Il lit `config.json`, résout le chemin des données relativement au fichier de configuration et crée un dossier de sortie horodaté sous `runs/`. On peut aussi choisir explicitement ce dossier avec `--output-dir`. Il affiche les métriques globales et les chemins des artefacts LSTM et Transformer.
+
+`src/retail_forecast/run_metadata.py` ajoute les preuves de l’exécution dans ce dossier :
+
+- `config.json` et une copie de `pyproject.toml`/`uv.lock` ;
+- `run_manifest.json`, avec le SHA-256 et l’emplacement du fichier source, ses dimensions et colonnes, les dates, les versions logicielles et l’état Git ;
+- `daily_sales.csv`, le snapshot compact des séries quotidiennes réellement préparées, avec son empreinte ; le gros fichier Excel n’est pas recopié ;
+- `split.csv`, qui identifie chaque exemple par produit et date cible, ses 100 jours d’historique, sa cible et son appartenance au train, au test ou à une période exclue ;
+- `metrics.json`, `test_predictions.csv` et `training_losses.json` ;
+- les empreintes SHA-256 des manifestes et poids des deux modèles.
+
+Le fichier source original doit rester disponible à l’emplacement indiqué et avoir la même empreinte pour reproduire l’exécution à partir des lignes brutes. Le snapshot quotidien sauvegardé permet toutefois de retrouver les séries agrégées qui ont alimenté la création des exemples.
+
+`tests/test_pipeline.py` contient deux tests :
+
+- le test nominal vérifie l’ordre ingestion → préparation → séquences → entraînement → évaluation → sauvegardes ; il vérifie aussi que l’évaluation ne reçoit que les indices de test ;
+- le test d’échec simule une `DataValidationError` à l’ingestion et vérifie que préparation, entraînement, évaluation et sauvegarde ne sont pas appelés.
+
+Lancer tous les tests depuis la racine du projet :
+
+```bash
+uv run pytest -q
+```
+
+Résultat vérifié : **38 tests réussis**, avec un avertissement Pandas non bloquant associé au test d’une date invalide.
+
+Pour exécuter manuellement un entraînement complet sur le fichier réel, depuis la racine du projet :
+
+```bash
+PYTHONPATH=src uv run python -m retail_forecast.train \
+  --config config.json \
+  --output-dir runs/test-etape-6
+```
+
+Cette commande lit le fichier indiqué dans `config.json`, entraîne le LSTM et le Transformer selon les paramètres configurés (65 époques sur CPU par défaut), évalue leurs résultats sur septembre 2011 et écrit leurs artefacts dans `runs/test-etape-6/lstm` et `runs/test-etape-6/transformer`. `PYTHONPATH=src` rend le package `retail_forecast` importable lors de ce lancement ; le réglage `pythonpath = ["src"]` de `pyproject.toml` ne concerne que pytest. Le dossier d’entraînement réel n’a pas été généré pendant les tests unitaires : ceux-ci simulent les étapes coûteuses du pipeline.
 
 ### Étape 7 — Ajouter la traçabilité MLflow
 

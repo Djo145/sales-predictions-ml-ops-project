@@ -119,11 +119,21 @@ Le test enregistré porte sur septembre 2011 et compare les deux modèles à la 
 
 ## Progression de l’industrialisation
 
-Les éléments déjà réalisés sont la provenance documentée, l’exploration, la séparation temporelle et le prototype des deux modèles dans les notebooks. La prochaine étape est de fixer les contrats et les contrôles des données. Chaque module aura des tests ciblés avant d’être intégré à la suite. Les notebooks ne seront pas une dépendance à l’exécution du service.
+Les éléments déjà réalisés sont la provenance documentée, l’exploration, la séparation temporelle et le prototype des deux modèles dans les notebooks. L’étape 1 a commencé : le contrat des lignes brutes est défini et sa validation est couverte par des tests unitaires. Chaque module aura des tests ciblés avant d’être intégré à la suite. Les notebooks ne seront pas une dépendance à l’exécution du service.
 
-### Étape 1 — Définir les contrats et valider les données — prochaine étape
+### Étape 1 — Définir les contrats et valider les données — réalisée
 
-Créer `src/retail_forecast/schemas.py` et `src/retail_forecast/validation.py` pour décrire les colonnes attendues et vérifier les identifiants, dates, codes produits et quantités avant toute agrégation. Des données non conformes devront arrêter le traitement avec une erreur lisible. Ajouter `tests/test_validation.py` avec des cas acceptés et rejetés.
+Le contrat concerne les **lignes brutes de facture**, avant leur agrégation en ventes quotidiennes. Il est décrit dans `src/retail_forecast/schemas.py` et contrôlé par `validate_raw_data` dans `src/retail_forecast/validation.py`. La fonction retourne le DataFrame inchangé si les règles passent ; sinon, elle lève `DataValidationError` avec les problèmes détectés.
+
+| Colonne | Règle actuelle |
+| --- | --- |
+| `InvoiceNo`, `StockCode` | Obligatoires, non vides. |
+| `Quantity` | Obligatoire, renseigné, numérique, fini et entier. Les valeurs négatives sont acceptées : leur traitement appartient à l’agrégation ultérieure. |
+| `InvoiceDate` | Obligatoire et convertible en date. |
+| `UnitPrice` | Facultatif ; les valeurs absentes sont acceptées. Si renseigné, le prix doit être numérique, fini et supérieur ou égal à zéro. |
+| `Description`, `CustomerID`, `Country` | Facultatives ; leurs valeurs absentes sont autorisées. |
+
+Les tests de `tests/test_validation.py` couvrent les données conformes, les colonnes ou valeurs manquantes, les identifiants vides, les quantités non entières, les dates illisibles et les prix invalides. Résultat vérifié : **9 tests réussis** avec `uv run pytest -q`.
 
 ### Étape 2 — Extraire l’ingestion et la préparation des données
 

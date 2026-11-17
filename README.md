@@ -162,7 +162,23 @@ Commande : `uv run pytest -q`. Dernière vérification de la suite complète ave
 
 ### Étape 4 — Rendre l’entraînement et l’évaluation reproductibles
 
-Créer `src/retail_forecast/training.py` pour entraîner les modèles avec la configuration du projet et `src/retail_forecast/evaluation.py` pour calculer la baseline, la MAE et la RMSE, globalement et par produit. Mettre les dates, la fenêtre de 100 jours et les hyperparamètres dans `config.json`. Ajouter des tests pour le split chronologique et les métriques.
+Cette étape entraîne les deux modèles de l’étape 3 sur les séquences produites à l’étape 2, puis les compare à une baseline simple. Elle ne sauvegarde pas encore de modèle sur disque et ne lance pas encore toute la chaîne depuis une commande unique.
+
+`config.json` rassemble le fichier source, les paramètres de préparation, les dates du découpage et les paramètres d’entraînement. Les produits sont sélectionnés sur la période allant jusqu’au **31 août 2011** ; les cibles jusqu’au 31 août servent à l’entraînement, et celles du **1er au 30 septembre 2011** servent au test. Le modèle prédit toujours une cible à partir des 100 jours précédents. Une fenêtre de test peut donc contenir des jours antérieurs au test : c’est la date de la cible, et non celle du début de la fenêtre, qui décide du split.
+
+`src/retail_forecast/training.py` réalise ce split chronologique, attribue un indice stable à chaque `StockCode`, puis entraîne le LSTM et le Transformer avec les paramètres de `config.json` (optimiseur Adam, erreur quadratique moyenne et graine définie). Il retourne les modèles, les indices train/test et l’historique de perte. Les deux modèles partagent leurs poids entre produits et reçoivent l’indice du produit en plus de sa séquence de ventes.
+
+`src/retail_forecast/evaluation.py` calcule une baseline qui moyenne les ventes des quatre mêmes jours de semaine précédents (retards de 7, 14, 21 et 28 jours). Elle calcule la MAE et la RMSE pour la baseline et les modèles, globalement et par produit, et conserve une table des prédictions avec la date, le produit et la valeur réelle.
+
+Les tests de `tests/test_training.py` vérifient que les dates limites séparent bien train et test et qu’un entraînement court des deux modèles fonctionne avec une correspondance produit-indice stable. Ceux de `tests/test_evaluation.py` vérifient le calcul de la baseline, les métriques sur un exemple connu et le rejet de tableaux de tailles incompatibles.
+
+Pour lancer toute la suite :
+
+```bash
+uv run pytest -q
+```
+
+Résultat vérifié : **29 tests réussis**. Un avertissement Pandas non bloquant est attendu dans un test qui vérifie le rejet d’une date invalide. Ces tests incluent un entraînement miniature d’une époque ; ils ne prouvent pas encore qu’un entraînement complet sur le fichier réel a été exécuté. L’exécution complète et reproductible sera raccordée au pipeline dans une étape ultérieure.
 
 ### Étape 5 — Sauvegarder et recharger un modèle complet
 

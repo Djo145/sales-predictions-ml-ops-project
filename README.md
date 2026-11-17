@@ -119,7 +119,7 @@ Le test enregistré porte sur septembre 2011 et compare les deux modèles à la 
 
 ## Progression de l’industrialisation
 
-Les éléments déjà réalisés sont la provenance documentée, l’exploration, la séparation temporelle et le prototype des deux modèles dans les notebooks. L’étape 1 a commencé : le contrat des lignes brutes est défini et sa validation est couverte par des tests unitaires. Chaque module aura des tests ciblés avant d’être intégré à la suite. Les notebooks ne seront pas une dépendance à l’exécution du service.
+Les éléments déjà réalisés sont la provenance documentée, l’exploration, la séparation temporelle, le prototype des deux modèles dans les notebooks, ainsi que les étapes 1 et 2 de validation et de préparation des données. Chaque module aura des tests ciblés avant d’être intégré à la suite. Les notebooks ne seront pas une dépendance à l’exécution du service.
 
 ### Étape 1 — Définir les contrats et valider les données — réalisée
 
@@ -135,9 +135,20 @@ Le contrat concerne les **lignes brutes de facture**, avant leur agrégation en 
 
 Les tests de `tests/test_validation.py` couvrent les données conformes, les colonnes ou valeurs manquantes, les identifiants vides, les quantités non entières, les dates illisibles et les prix invalides. Résultat vérifié : **9 tests réussis** avec `uv run pytest -q`.
 
-### Étape 2 — Extraire l’ingestion et la préparation des données
+### Étape 2 — Extraire l’ingestion et la préparation des données — implémentée et testée
 
-Créer `src/retail_forecast/ingestion.py` pour charger les données actuelles, puis `src/retail_forecast/preprocessing.py` pour agréger les lignes de facture en quantités brutes quotidiennes par produit, compléter les jours sans vente et construire les fenêtres de 100 jours. Ajouter `tests/test_preprocessing.py` avec de petits exemples vérifiant les annulations, les quantités négatives, les jours à zéro et les fenêtres.
+`src/retail_forecast/ingestion.py` contient `load_current_data(file_path)`. Cette fonction lit le fichier Excel indiqué, applique la validation de l’étape 1 et retourne les lignes brutes sans les transformer. Le futur `main(config.json)` fournira le chemin ; l’ingestion ne lit donc pas elle-même la configuration.
+
+`src/retail_forecast/preprocessing.py` contient deux transformations :
+
+- `prepare_daily_gross_sales` exclut les factures commençant par `C` et les quantités non positives, agrège les ventes par produit et par jour, sélectionne les dix produits les plus vendus jusqu’au 31 août, puis complète les jours sans vente par zéro. Les séries peuvent continuer jusqu’au 30 septembre pour préparer les cibles du test.
+- `build_sequences` crée les entrées de 100 jours et la cible du jour suivant. Il conserve le code produit et la date cible pour permettre le découpage chronologique ultérieur. Pour 100 jours d’historique, une entrée de ventes a la forme `(N, 100, 1)` et la cible `(N,)`.
+
+`tests/test_preprocessing.py` vérifie avec de petits DataFrames : l’exclusion des factures annulées, l’exclusion des quantités négatives, l’ajout d’un jour à zéro, le classement des produits sans utiliser les jours après la date de sélection et l’association correcte entre fenêtre et cible.
+
+`tests/test_ingestion.py` vérifie que l’absence du fichier produit une erreur claire, que le lecteur Excel est appelé avec le chemin fourni et que les données lues passent par la validation. La lecture Excel est simulée dans ces tests unitaires : ils ne dépendent donc pas du gros fichier réel.
+
+Commande de test : `uv run pytest -q`. Dernière vérification de la suite complète avec `./.venv/bin/pytest -q` : **17 tests réussis** (9 validation, 3 ingestion, 5 préparation). Pandas affiche un avertissement non bloquant lors du test d’une date volontairement illisible.
 
 ### Étape 3 — Déplacer les architectures dans des modules
 

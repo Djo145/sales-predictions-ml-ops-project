@@ -182,7 +182,31 @@ Résultat vérifié : **29 tests réussis**. Un avertissement Pandas non bloquan
 
 ### Étape 5 — Sauvegarder et recharger un modèle complet
 
-Créer `src/retail_forecast/artifacts.py` pour conserver les poids, l’architecture, le dictionnaire `StockCode → indice`, la normalisation et le contrat d’entrée. Créer `src/retail_forecast/inference.py` pour charger cet ensemble et prévoir le lendemain sans relancer l’entraînement. Tester le rechargement dans un nouveau processus et vérifier que les prédictions correspondent.
+Cette étape sépare l’apprentissage de l’utilisation du modèle. `training.py` produit les réseaux ajustés ; les modules de cette étape sauvegardent ce qu’il faut pour les réutiliser plus tard, sans garder les objets Python de l’entraînement en mémoire.
+
+`src/retail_forecast/artifacts.py` contient `save_model_artifact` et `load_model_artifact`. Pour chaque modèle, la sauvegarde comprend :
+
+- `model_state.pt` : les poids appris du réseau ;
+- `manifest.json` : l’architecture et ses paramètres, la fenêtre de 100 jours, le mapping `StockCode → indice` et le contrat d’entrée/sortie.
+
+Le contrat précise que l’entrée est constituée des ventes quotidiennes brutes, dans l’ordre chronologique, sans normalisation. Les poids sont chargés avec `weights_only=True`. L’artefact est un dossier contenant ces deux fichiers.
+
+`src/retail_forecast/inference.py` contient `predict_next_day`. Cette fonction reçoit un artefact chargé, le code d’un produit et ses 100 dernières quantités journalières. Elle refuse un produit absent du mapping, un historique de mauvaise longueur ou des quantités négatives/non finies. Elle renvoie une prévision continue, ramenée à zéro si le réseau prédit une valeur négative ; elle ne l’arrondit pas.
+
+`tests/test_artifacts.py` vérifie que :
+
+- LSTM et Transformer donnent la même prédiction avant et après sauvegarde/rechargement ;
+- le mapping produit est conservé et le modèle rechargé est en mode évaluation ;
+- un produit inconnu, un historique trop court, une quantité négative ou non finie sont rejetés ;
+- un artefact peut être chargé et utilisé dans un processus Python séparé.
+
+Lancer la suite complète avec :
+
+```bash
+uv run pytest -q
+```
+
+Résultat vérifié : **34 tests réussis**. Un avertissement Pandas non bloquant reste associé au test d’une date invalide. Les tests d’artefacts utilisent de petits modèles ; ils valident la sauvegarde et le rechargement, mais ne signifient pas qu’un entraînement complet sur le fichier Excel a été exécuté. Le pipeline qui entraînera sur les données réelles sera construit à l’étape suivante.
 
 ### Étape 6 — Construire le pipeline d’entraînement
 

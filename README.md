@@ -119,7 +119,7 @@ Le test enregistré porte sur septembre 2011 et compare les deux modèles à la 
 
 ## Progression de l’industrialisation
 
-Les éléments déjà réalisés sont la provenance documentée, l’exploration, la séparation temporelle, le prototype des deux modèles dans les notebooks, ainsi que les étapes 1 et 2 de validation et de préparation des données. Chaque module aura des tests ciblés avant d’être intégré à la suite. Les notebooks ne seront pas une dépendance à l’exécution du service.
+Les éléments déjà réalisés sont la provenance documentée, l’exploration, la séparation temporelle, le prototype des deux modèles dans les notebooks, ainsi que les étapes 1 à 3 de validation, préparation et définition des architectures. Chaque module aura des tests ciblés avant d’être intégré à la suite. Les notebooks ne seront pas une dépendance à l’exécution du service.
 
 ### Étape 1 — Définir les contrats et valider les données — réalisée
 
@@ -150,9 +150,15 @@ Les tests de `tests/test_validation.py` couvrent les données conformes, les col
 
 Commande de test : `uv run pytest -q`. Dernière vérification de la suite complète avec `./.venv/bin/pytest -q` : **17 tests réussis** (9 validation, 3 ingestion, 5 préparation). Pandas affiche un avertissement non bloquant lors du test d’une date volontairement illisible.
 
-### Étape 3 — Déplacer les architectures dans des modules
+### Étape 3 — Déplacer les architectures dans des modules — implémentée et testée
 
-Créer `src/retail_forecast/models.py` avec le LSTM et le Transformer. Leur entrée comprendra la séquence de ventes et l’indice du produit ; leur sortie sera une quantité prévue. Tester les dimensions d’entrée/sortie et le refus d’un produit inconnu.
+`src/retail_forecast/models.py` contient `SmallLSTM` et `SmallTransformer`, repris du prototype du notebook. Les deux modèles sont partagés entre les dix produits et prédisent une quantité pour le jour suivant. Ils ne chargent pas les données et ne réalisent pas l’entraînement.
+
+Pour un batch de `B` exemples, chacun reçoit les ventes `x` de forme `(B, 100, 1)` et les indices entiers des produits `product_ids` de forme `(B,)`. L’embedding associe une représentation apprise à chaque indice produit. Chaque modèle retourne une prévision de forme `(B,)`. Le LSTM utilise une taille cachée de 16 ; le Transformer utilise un encodeur à un seul bloc avec `d_model=16`, deux têtes et un embedding produit de taille 4.
+
+`tests/test_models.py` vérifie pour les deux architectures qu’un batch de deux exemples produit deux valeurs finies, qu’un batch de taille 1 conserve une sortie de forme `(1,)`, et qu’une séquence de longueur incorrecte est rejetée. Un test vérifie aussi le rejet d’un nombre d’indices produit différent du nombre d’exemples. Le code texte `StockCode` doit être converti en indice avant l’appel au modèle ; le refus d’un code produit inconnu sera testé dans le composant de mapping/inférence, pas dans le réseau lui-même.
+
+Commande : `uv run pytest -q`. Dernière vérification de la suite complète avec `./.venv/bin/pytest -q` : **24 tests réussis**, avec le même avertissement Pandas non bloquant sur une date volontairement invalide.
 
 ### Étape 4 — Rendre l’entraînement et l’évaluation reproductibles
 

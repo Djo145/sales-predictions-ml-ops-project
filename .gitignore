@@ -1,0 +1,43 @@
+# Environnement Python et caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Fichiers locaux et secrets
+.env
+.env.*
+!.env.example
+*.secret
+
+# Données sources et jeux dérivés (téléchargeables/reproductibles)
+*.xlsx
+*.xls
+*.csv
+*.parquet
+*.zip
+
+# Artefacts et sorties générés
+mlruns/
+mlartifacts/
+artifacts/
+outputs/
+models/
+checkpoints/
+*.pt
+*.pth
+*.joblib
+*.pkl
+*.log
+
+# Fichiers temporaires d'éditeur et système
+.DS_Store
+Thumbs.db
+.ipynb_checkpoints/
+.vscode/
+.idea/

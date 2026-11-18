@@ -1,5 +1,7 @@
 """Tests de l'ordre du pipeline et de son arrêt en cas de données invalides."""
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -30,6 +32,29 @@ def test_pipeline_runs_steps_in_order_and_evaluates_test_only(
     tmp_path,
 ):
     events = []
+
+    fake_run = SimpleNamespace(info=SimpleNamespace(run_id="test-run"))
+
+    monkeypatch.setattr(
+        pipeline,
+        "start_tracking_run",
+        lambda config: events.append("tracking-start") or fake_run,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "log_successful_run",
+        lambda **kwargs: events.append("tracking-log") or {"LSTM": {}, "Transformer": {}},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "finish_tracking_run",
+        lambda: events.append("tracking-finish"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "fail_tracking_run",
+        lambda error: pytest.fail("Le pipeline nominal ne doit pas échouer."),
+    )
     raw_data = object()
     daily_sales = object()
 
@@ -103,6 +128,7 @@ def test_pipeline_runs_steps_in_order_and_evaluates_test_only(
     )
 
     assert events == [
+        "tracking-start",
         "ingestion",
         "preparation",
         "sequences",
@@ -111,52 +137,80 @@ def test_pipeline_runs_steps_in_order_and_evaluates_test_only(
         "save-LSTM",
         "save-Transformer",
         "metadata",
+        "tracking-log",
+        "tracking-finish",
     ]
     assert result["train_count"] == 2
     assert result["test_count"] == 2
+    assert result["mlflow_run_id"] == "test-run"
 
 
 def test_invalid_data_stops_before_training_evaluation_and_saving(
     monkeypatch,
     tmp_path,
 ):
+    fake_run = SimpleNamespace(info=SimpleNamespace(run_id="failed-test-run"))
+    tracking_failures = []
+
+    monkeypatch.setattr(
+        pipeline,
+        "start_tracking_run",
+        lambda config: fake_run,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "fail_tracking_run",
+        lambda error: tracking_failures.append(error),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "log_successful_run",
+        lambda **kwargs: pytest.fail(
+            "Un pipeline invalide ne doit pas publier de modèles."
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "finish_tracking_run",
+        lambda: pytest.fail("Un pipeline invalide ne doit pas finir en succès."),
+    )
+
     def reject_data(_path):
         raise DataValidationError("données invalides")
 
-    training = pytest.MonkeyPatch()
-    training.setattr(pipeline, "load_current_data", reject_data)
-    preparation = training.setattr(
+    monkeypatch.setattr(pipeline, "load_current_data", reject_data)
+    monkeypatch.setattr(
         pipeline,
         "prepare_daily_gross_sales",
         lambda *args, **kwargs: pytest.fail("La préparation ne doit pas être appelée."),
     )
-    training.setattr(
+    monkeypatch.setattr(
         pipeline,
         "build_sequences",
         lambda *args, **kwargs: pytest.fail("La création des séquences ne doit pas être appelée."),
     )
-    training.setattr(
+    monkeypatch.setattr(
         pipeline,
         "train_models",
         lambda *args, **kwargs: pytest.fail("L'entraînement ne doit pas être appelé."),
     )
-    training.setattr(
+    monkeypatch.setattr(
         pipeline,
         "evaluate_models",
         lambda *args, **kwargs: pytest.fail("L'évaluation ne doit pas être appelée."),
     )
-    training.setattr(
+    monkeypatch.setattr(
         pipeline,
         "save_model_artifact",
         lambda *args, **kwargs: pytest.fail("Aucun modèle ne doit être sauvegardé."),
     )
 
-    try:
-        with pytest.raises(DataValidationError, match="données invalides"):
-            pipeline.run_training_pipeline(
-                config=make_config(),
-                data_path=tmp_path / "invalid.xlsx",
-                artifact_dir=tmp_path / "output",
-            )
-    finally:
-        training.undo()
+    with pytest.raises(DataValidationError, match="données invalides"):
+        pipeline.run_training_pipeline(
+            config=make_config(),
+            data_path=tmp_path / "invalid.xlsx",
+            artifact_dir=tmp_path / "output",
+        )
+
+    assert len(tracking_failures) == 1
+    assert isinstance(tracking_failures[0], DataValidationError)

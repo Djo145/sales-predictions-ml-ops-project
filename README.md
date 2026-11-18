@@ -250,7 +250,115 @@ Cette commande lit le fichier indiqué dans `config.json`, entraîne le LSTM et 
 
 ### Étape 7 — Ajouter la traçabilité MLflow
 
-Créer `src/retail_forecast/tracking.py` pour enregistrer les données et leur empreinte, la configuration, les métriques, les artefacts et les versions des modèles. Définir une règle explicite de qualification et vérifier qu’une ancienne version peut être retrouvée et rechargée. Ajouter des tests unitaires avec un client MLflow simulé pour vérifier les informations journalisées et les erreurs ; compléter par un test d’intégration contre le serveur MLflow local.
+#### Rôle de MLflow et de Docker
+
+MLflow est lancé dans un conteneur Docker défini dans `compose.yml`, avec l’image
+`ghcr.io/mlflow/mlflow:v3.16.1`. Docker doit être installé et démarré sur le poste pour utiliser
+`docker compose`. Le serveur MLflow est accessible depuis le navigateur et depuis le programme
+Python à l’adresse `http://localhost:5100`.
+
+Seul le serveur MLflow tourne dans Docker pour cette étape : **l’entraînement reste exécuté sur le
+poste avec `uv`**. Les données ne sont donc pas copiées dans le conteneur d’entraînement. Le volume
+Docker `mlflow_data` conserve les métadonnées MLflow et les artefacts du serveur entre ses
+redémarrages. Ne pas utiliser `docker compose down -v` si l’on veut conserver ces données.
+
+#### Configuration locale
+
+Le fichier `.env.example` fournit les URI de suivi et du registre. Pour créer la configuration
+locale, ignorée par Git, copier ce fichier une seule fois depuis la racine du projet :
+
+```bash
+cp -n .env.example .env
+```
+
+`-n` évite d’écraser un éventuel `.env` déjà personnalisé. Dans chaque nouveau terminal Bash qui
+lancera Python, charger les variables :
+
+```bash
+set -a
+source .env
+set +a
+```
+
+Cette commande transmet les variables au processus Python. Compose peut lire `.env` pour sa
+configuration, mais le programme exécuté directement sur le poste ne le charge pas tout seul.
+Ne jamais committer `.env` ; seul `.env.example` doit être partagé.
+
+#### Ce qui est enregistré pour un run
+
+`src/retail_forecast/tracking.py` ouvre un run MLflow au début du pipeline. Après la préparation,
+l’entraînement, l’évaluation et la création du manifeste local, le pipeline envoie au serveur :
+
+- les paramètres de `config.json` sous forme de paramètres MLflow ;
+- les métadonnées du jeu quotidien préparé, avec `mlflow.data.from_pandas` et `mlflow.log_input` ;
+- le snapshot exact `daily_sales.csv`, le split, les prédictions, les métriques, le manifeste, la
+  configuration, l’environnement et les artefacts locaux, avec `mlflow.log_artifacts` ;
+- les MAE et RMSE du LSTM, du Transformer et de la baseline quatre semaines ;
+- les deux modèles PyTorch dans le registre, sous les noms stables
+  `retail-forecast-lstm` et `retail-forecast-transformer`.
+
+Le `run_manifest.json` conserve les SHA-256 du fichier Excel source et du snapshot quotidien. Ces
+empreintes identifient le contenu des fichiers ; le digest calculé par MLflow pour ses métadonnées
+de dataset est une valeur distincte. Le fichier Excel original n’est pas téléversé par
+`log_artifacts` : le snapshot quotidien effectivement utilisé, lui, est conservé comme artefact.
+
+La qualification enregistrée est une règle pédagogique : `candidate` si la MAE est finie et
+strictement meilleure que celle de la baseline ; sinon `rejected`. `candidate` ne signifie pas
+« prêt pour la production ». Cette décision et sa politique sont également conservées dans les
+informations de la version et dans le rapport du run.
+
+#### Tests
+
+Les tests unitaires simulent les fonctions MLflow : ils vérifient le déroulement et la gestion d’un
+échec sans contacter le serveur ni créer de vrai run. Depuis la racine du projet :
+
+```bash
+uv run --locked pytest -q
+```
+
+#### Vérification réelle avec le serveur MLflow
+
+1. Installer et démarrer Docker, puis vérifier les versions des commandes :
+
+   ```bash
+   docker --version
+   docker compose version
+   ```
+
+2. Depuis la racine du projet, démarrer MLflow :
+
+   ```bash
+   docker compose up -d mlflow
+   docker compose ps mlflow
+   curl --fail http://localhost:5100/health
+   ```
+
+3. Dans le même terminal Bash, créer/charger `.env`, vérifier que le client atteint le serveur,
+   puis lancer l’entraînement réel :
+
+   ```bash
+   cp -n .env.example .env
+   set -a
+   source .env
+   set +a
+   uv run --locked python -c "import mlflow; print(mlflow.__version__, mlflow.get_tracking_uri())"
+   PYTHONPATH=src uv run --locked python -m retail_forecast.train --config config.json
+   ```
+
+   Le fichier de configuration actuel demande 30 époques sur CPU. La commande ne précise pas
+   `--output-dir` : `train.py` crée donc un nouveau dossier local `runs/run_...` pour cette
+   exécution.
+
+4. Ouvrir `http://localhost:5100`, choisir l’expérience `retail-forecast`, puis vérifier que le
+   dernier run est `FINISHED` et contient les paramètres, métriques, données et artefacts listés
+   ci-dessus. Dans le registre, vérifier les versions LSTM et Transformer ainsi que leurs tags de
+   qualification. Une erreur de pipeline doit produire un run `FAILED`, et non un faux succès.
+
+Chaque nouvelle exécution réelle ouvre un **nouveau run**. Si elle atteint l’étape d’enregistrement,
+elle crée aussi une nouvelle version de chacun des modèles ; les versions précédentes restent
+disponibles. Les appels `mlflow.log_*` et `mlflow.pytorch.log_model` sont les opérations qui
+effectuent ces sauvegardes : le simple fait de démarrer MLflow ou de calculer un modèle ne les
+enregistre pas automatiquement.
 
 ### Étape 8 — Orchestrer le pipeline avec Prefect
 

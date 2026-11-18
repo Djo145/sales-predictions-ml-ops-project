@@ -271,18 +271,10 @@ locale, ignorée par Git, copier ce fichier une seule fois depuis la racine du p
 cp -n .env.example .env
 ```
 
-`-n` évite d’écraser un éventuel `.env` déjà personnalisé. Dans chaque nouveau terminal Bash qui
-lancera Python, charger les variables :
-
-```bash
-set -a
-source .env
-set +a
-```
-
-Cette commande transmet les variables au processus Python. Compose peut lire `.env` pour sa
-configuration, mais le programme exécuté directement sur le poste ne le charge pas tout seul.
-Ne jamais committer `.env` ; seul `.env.example` doit être partagé.
+`-n` évite d’écraser un éventuel `.env` déjà personnalisé. Compose lit ce fichier pour sa
+configuration ; pour Python, utiliser `uv run --env-file .env ...`. Cette option transmet les
+variables au processus sans commande `export` ou `source`. Ne jamais committer `.env` ; seul
+`.env.example` doit être partagé.
 
 #### Ce qui est enregistré pour un run
 
@@ -333,21 +325,19 @@ uv run --locked pytest -q
    curl --fail http://localhost:5100/health
    ```
 
-3. Dans le même terminal Bash, créer/charger `.env`, vérifier que le client atteint le serveur,
-   puis lancer l’entraînement réel :
+3. Vérifier que `.env` existe (le créer une seule fois depuis `.env.example` si nécessaire),
+   vérifier que le client atteint le serveur, puis lancer l’entraînement réel :
 
    ```bash
    cp -n .env.example .env
-   set -a
-   source .env
-   set +a
-   uv run --locked python -c "import mlflow; print(mlflow.__version__, mlflow.get_tracking_uri())"
-   PYTHONPATH=src uv run --locked python -m retail_forecast.train --config config.json
+   uv run --env-file .env --locked python -c "import mlflow; print(mlflow.__version__, mlflow.get_tracking_uri())"
+   PYTHONPATH=src uv run --env-file .env --locked python -m retail_forecast.train \
+     --config config.json \
+     --output-dir runs/mlflow_step7_01
    ```
 
-   Le fichier de configuration actuel demande 30 époques sur CPU. La commande ne précise pas
-   `--output-dir` : `train.py` crée donc un nouveau dossier local `runs/run_...` pour cette
-   exécution.
+   Le fichier de configuration actuel demande 30 époques sur CPU. Le dossier de sortie est
+   volontairement explicite et doit être nouveau pour chaque entraînement réel.
 
 4. Ouvrir `http://localhost:5100`, choisir l’expérience `retail-forecast`, puis vérifier que le
    dernier run est `FINISHED` et contient les paramètres, métriques, données et artefacts listés
@@ -360,9 +350,158 @@ disponibles. Les appels `mlflow.log_*` et `mlflow.pytorch.log_model` sont les op
 effectuent ces sauvegardes : le simple fait de démarrer MLflow ou de calculer un modèle ne les
 enregistre pas automatiquement.
 
-### Étape 8 — Orchestrer le pipeline avec Prefect
+### Étape 8 — Orchestrer chaque étape avec Prefect
 
-Créer `src/retail_forecast/flows.py` pour suivre les étapes du pipeline, leurs durées et leurs erreurs. Configurer des reprises limitées pour les pannes temporaires, sans rejouer automatiquement une donnée invalide ni créer une publication MLflow en double. Ajouter des tests unitaires des tâches et des règles de retry, puis vérifier un flow nominal et un échec contrôlé avec le serveur Prefect.
+`src/retail_forecast/flows.py` expose le flow `retail-sales-training` et cinq tâches lisibles :
+`ingestion-and-validation`, `prepare-daily-sales-cached`, `train-lstm-and-transformer`,
+`evaluate-models`, puis `save-artifacts-and-publish-to-mlflow`. Elles appellent les fonctions métier
+extraites dans `pipeline.py` : l’algorithme n’est donc pas recopié dans le flow. Leurs résultats
+forment les dépendances et le pipeline reste séquentiel.
+
+Le run MLflow est ouvert une seule fois pour le flow. Son `run_id` est transmis à la tâche de
+publication et le `flow_run_id` Prefect est conservé comme tag MLflow. En cas d’échec terminal, le
+flow marque ce même run MLflow `FAILED` puis laisse l’exception remonter. L’évaluation et la
+publication n’ont aucun retry : les relancer pourrait refaire un entraînement ou créer une seconde
+version de modèle.
+
+#### Retry d’ingestion
+
+Seule l’ingestion dispose de deux retries, soit au maximum trois tentatives, espacées de 2 puis
+5 secondes. La condition `retry_transient_ingestion` accepte uniquement les erreurs réseau ou
+d’E/S temporaires (`TimeoutError`, `ConnectionError` et quelques codes `OSError`). Un fichier
+absent, une erreur de validation ou un classeur mal formé échoue sans retry. Le fichier utilisé
+étant local, ce retry couvre surtout les incidents de lecture temporaires ; ce n’est pas un retry
+d’appel à une API.
+
+#### Cache de préparation
+
+Seule la tâche pure `prepare-daily-sales-cached` est mise en cache. Sa clé contient l’empreinte
+SHA-256 du fichier source, `top_n`, `selection_end`, `lookback` et la constante
+`PREPARATION_VERSION`. Elle ne contient ni le `flow_run_id` ni un `run_id` MLflow : deux flows sur
+le même contenu et les mêmes paramètres peuvent réutiliser ce calcul. Un changement de fichier,
+paramètre ou version invalide la clé. Le calcul ne journalise rien dans MLflow ; chaque nouveau
+flow continue donc à entraîner et publier normalement.
+
+Prefect stocke les résultats de cette tâche dans `.prefect-cache/task-results` sur le poste, pas dans
+le conteneur du serveur. Le dossier est ignoré par Git. Au début du flow,
+`ensure_cache_storage_block()` vérifie que le block `local-file-system/retail-forecast-cache` existe
+et le crée si nécessaire. Cette vérification se fait avant l’ingestion : un problème de stockage
+échoue rapidement et ne lit pas inutilement le gros fichier Excel. Le serveur Prefect doit donc
+être joignable dès le début du flow.
+
+`tests/test_flows.py` vérifie la chaîne des cinq tâches, la propagation d’un échec, le filtrage des
+retries et l’invalidation de la clé de cache selon le contenu source, les paramètres et la version
+de préparation. Les tests n’appellent ni services distants ni entraînement réel.
+
+#### Tester Prefect réellement
+
+Depuis la racine de ce projet, démarrer le serveur Prefect et MLflow. Le Compose publie Prefect sur
+le port hôte `4300` et MLflow sur `5100` :
+
+```bash
+docker compose up -d --wait prefect mlflow
+docker compose ps prefect mlflow
+```
+
+Les URI Prefect et MLflow sont déjà définies dans le fichier local `.env`. Le shell ne charge pas
+automatiquement ce fichier ; `uv run --env-file .env` transmet ses variables au processus Python.
+Il n’est donc pas nécessaire de lancer des commandes `export`.
+
+Lancer d’abord les tests unitaires, puis tous les tests :
+
+```bash
+uv run --env-file .env --locked pytest -q tests/test_flows.py
+uv run --env-file .env --locked pytest -q
+```
+
+L’enregistrement du block est automatique au premier flow. Pour le créer explicitement avant le
+lancement (facultatif), cette commande nécessite le serveur Prefect actif :
+
+```bash
+PYTHONPATH=src uv run --env-file .env --locked python -m retail_forecast.prefect_setup
+```
+
+Pour un entraînement réel, avec le fichier indiqué dans `config.json` présent :
+
+```bash
+PYTHONPATH=src uv run --env-file .env --locked python -m retail_forecast.train \
+  --config config.json \
+  --output-dir runs/prefect_step8_02
+```
+
+`PYTHONPATH=src` rend le package `retail_forecast` importable depuis le dossier `src`. Cette
+commande exécute le flow dans le processus Python local ; elle n’envoie pas l’entraînement dans le
+conteneur Prefect. Ouvrir `http://localhost:4300` et vérifier un flow `retail-sales-training` et
+ses cinq tasks dans l’ordre. Une première exécution doit calculer la préparation ; une seconde
+exécution avec le même fichier et les mêmes paramètres doit afficher la tâche de préparation comme
+mise en cache, mais réentraîne et publie quand même les modèles. Utiliser un nouveau dossier de
+sortie pour chaque entraînement. Ouvrir ensuite `http://localhost:5100` pour vérifier le run MLflow,
+son tag `prefect.flow_run_id` et les modèles publiés.
+
+Pour observer un échec contrôlé sans toucher au fichier de configuration réel : copier
+`config.json` vers `/tmp/prefect-fail.json`, puis modifier dans cette copie `data.current_file` pour
+indiquer `/tmp/fichier-qui-nexiste-pas.xlsx`. Lancer ensuite :
+
+```bash
+PYTHONPATH=src uv run --env-file .env --locked python -m retail_forecast.train \
+  --config /tmp/prefect-fail.json \
+  --output-dir /tmp/prefect-step8-failure
+```
+
+La tâche et le flow doivent apparaître en échec dans Prefect. L’ingestion étant invalide, aucun
+modèle ne doit être publié ; le run MLflow doit conserver l’échec du pipeline.
+
+#### Déclencher depuis l’interface Prefect
+
+Le lancement précédent est suivi par Prefect mais est demandé depuis le terminal. Le fichier
+`src/retail_forecast/deploy.py` ajoute un **déploiement local** : il enregistre le flow auprès du
+serveur et garde un processus `serve` disponible pour exécuter les demandes créées depuis
+l’interface Prefect. Il ne contient pas une seconde version du pipeline : il importe simplement
+`training_flow`.
+
+Dans un terminal dédié, depuis la racine du projet, avec les services Docker déjà démarrés :
+
+```bash
+PYTHONPATH=src uv run --env-file .env --locked python -m retail_forecast.deploy \
+  --config config.json
+```
+
+Cette commande ne lance pas immédiatement un entraînement. Elle crée ou actualise le déploiement
+`retail-sales-training-local`, puis reste active. Tant que ce terminal est ouvert, aller sur
+`http://localhost:4300`, ouvrir ce déploiement et utiliser **Run**. Prefect envoie alors la demande
+au processus `serve`, qui démarre un sous-processus local pour exécuter le flow. Le calcul reste
+donc sur le PC ; le conteneur Prefect coordonne et conserve l’historique.
+
+Le paramètre par défaut `config_path` est un chemin absolu vers `config.json`. Il est modifiable dans
+l’interface avant le lancement. Aucun `output_dir` par défaut n’est imposé : chaque run crée son
+propre dossier horodaté sous `runs/`, ce qui évite d’écraser les artefacts antérieurs. La limite
+`limit=1` empêche ce processus `serve` d’exécuter deux entraînements simultanément.
+
+Pour ajouter une planification locale de test toutes les 15 minutes, arrêter le processus précédent
+avec `Ctrl+C`, puis relancer :
+
+```bash
+PYTHONPATH=src uv run --env-file .env --locked python -m retail_forecast.deploy \
+  --config config.json \
+  --interval-minutes 15
+```
+
+Le planning reste actif tant que `serve` tourne. Pour éviter des entraînements inutiles, commencer
+sans planning et déclencher une seule exécution depuis l’interface. Les tests de
+`tests/test_deploy.py` vérifient la configuration envoyée à `serve`, le chemin absolu, la limite de
+concurrence et le planning optionnel sans contacter un serveur Prefect :
+
+```bash
+uv run --env-file .env --locked pytest -q tests/test_deploy.py
+```
+
+Dernière suite exécutée après le découpage en tâches, l'ajout du précontrôle de cache et du
+déploiement local : **54 tests réussis**. Un avertissement Pandas
+non bloquant est attendu dans le test d’une date invalide. Les tests vérifient le prédicat de retry
+et la clé de cache ; le cache persistant et l’interface doivent aussi être vérifiés avec le serveur
+Prefect démarré. Pour tester l’invalidation manuelle, relancer avec un autre fichier source ou
+modifier un paramètre de préparation dans une copie de configuration ; garder un nouveau dossier de
+sortie, car un flow réussi publie toujours une nouvelle version MLflow.
 
 ### Étape 9 — Créer l’API de prédiction et de réception des ventes
 

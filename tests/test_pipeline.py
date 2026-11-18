@@ -48,12 +48,12 @@ def test_pipeline_runs_steps_in_order_and_evaluates_test_only(
     monkeypatch.setattr(
         pipeline,
         "finish_tracking_run",
-        lambda: events.append("tracking-finish"),
+        lambda run_id: events.append("tracking-finish"),
     )
     monkeypatch.setattr(
         pipeline,
         "fail_tracking_run",
-        lambda error: pytest.fail("Le pipeline nominal ne doit pas échouer."),
+        lambda run_id, error: pytest.fail("Le pipeline nominal ne doit pas échouer."),
     )
     raw_data = object()
     daily_sales = object()
@@ -80,6 +80,7 @@ def test_pipeline_runs_steps_in_order_and_evaluates_test_only(
         "load_current_data",
         lambda path: events.append("ingestion") or raw_data,
     )
+    monkeypatch.setattr(pipeline, "sha256_file", lambda path: "source-hash")
     monkeypatch.setattr(
         pipeline,
         "prepare_daily_gross_sales",
@@ -160,7 +161,7 @@ def test_invalid_data_stops_before_training_evaluation_and_saving(
     monkeypatch.setattr(
         pipeline,
         "fail_tracking_run",
-        lambda error: tracking_failures.append(error),
+        lambda run_id, error: tracking_failures.append((run_id, error)),
     )
     monkeypatch.setattr(
         pipeline,
@@ -179,6 +180,7 @@ def test_invalid_data_stops_before_training_evaluation_and_saving(
         raise DataValidationError("données invalides")
 
     monkeypatch.setattr(pipeline, "load_current_data", reject_data)
+    monkeypatch.setattr(pipeline, "sha256_file", lambda path: "source-hash")
     monkeypatch.setattr(
         pipeline,
         "prepare_daily_gross_sales",
@@ -213,4 +215,5 @@ def test_invalid_data_stops_before_training_evaluation_and_saving(
         )
 
     assert len(tracking_failures) == 1
-    assert isinstance(tracking_failures[0], DataValidationError)
+    assert tracking_failures[0][0] == "failed-test-run"
+    assert isinstance(tracking_failures[0][1], DataValidationError)

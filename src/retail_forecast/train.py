@@ -1,11 +1,8 @@
 """Point d'entrée en ligne de commande pour l'entraînement."""
 
 import argparse
-import json
-from datetime import datetime, timezone
-from pathlib import Path
 
-from retail_forecast.pipeline import run_training_pipeline
+from retail_forecast.flows import training_flow
 
 
 def main() -> None:
@@ -23,26 +20,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    config_path = Path(args.config).expanduser().resolve()
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-    project_dir = config_path.parent
-
-    data_path = Path(config["data"]["current_file"]).expanduser()
-    if not data_path.is_absolute():
-        data_path = project_dir / data_path
-
-    if args.output_dir:
-        output_dir = Path(args.output_dir).expanduser()
-        if not output_dir.is_absolute():
-            output_dir = project_dir / output_dir
-    else:
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        output_dir = project_dir / "runs" / f"run_{timestamp}"
-
-    result = run_training_pipeline(
-        config=config,
-        data_path=data_path,
-        artifact_dir=output_dir,
+    result = training_flow(
+        config_path=args.config,
+        output_dir=args.output_dir,
     )
 
     print("Évaluation sur la période de test :")

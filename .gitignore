@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.prefect-cache/
 .coverage
 htmlcov/
 
@@ -42,3 +43,6 @@ Thumbs.db
 .ipynb_checkpoints/
 .vscode/
 .idea/
+
+# Notes personnelles sur les technologies (non versionnées)
+Résumé des méthodes importantes des technologies des services/

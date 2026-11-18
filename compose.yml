@@ -1,0 +1,65 @@
+name: retail-forecast
+
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.16.1
+    entrypoint: ["mlflow"]
+    command:
+      - server
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - sqlite:////mlflow/mlflow.db
+      - --serve-artifacts
+      - --artifacts-destination
+      - /mlflow/artifacts
+      - --allowed-hosts
+      - "localhost:*,127.0.0.1:*,mlflow:5000"
+    ports:
+      - "127.0.0.1:5100:5000"
+    volumes:
+      - mlflow_data:/mlflow
+
+  prefect:
+    image: prefecthq/prefect:3.8.7-python3.12
+    command: ["prefect", "server", "start", "--host", "0.0.0.0", "--port", "4200"]
+    environment:
+      PREFECT_HOME: /var/lib/prefect
+      PREFECT_SERVER_DATABASE_CONNECTION_URL: sqlite+aiosqlite:////var/lib/prefect/prefect.db
+      PREFECT_SERVER_UI_API_URL: http://localhost:4300/api
+      PREFECT_API_URL: http://127.0.0.1:4200/api
+      PREFECT_SERVER_ANALYTICS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:4300:4200"
+    volumes:
+      - prefect_data:/var/lib/prefect
+
+  postgres:
+    image: postgres:18.6-bookworm
+    environment:
+      POSTGRES_DB: retail_forecast
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-local-retail-password}"
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+  grafana:
+    image: grafana/grafana:13.2.3
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-local-grafana-password}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:3100:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  mlflow_data:
+  prefect_data:
+  postgres_data:
+  grafana_data:
